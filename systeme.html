@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Système Solaire</title>
+    <style>
+      html, body { margin: 0; padding: 0; overflow: hidden; }
+    </style>
+  </head>
+  <body>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r81/three.min.js"></script>
+    <script src="JS/orbitControls.js"></script>
+    <script src="JS/onDocumentPlanetSearchPress.js"></script>
+    <script src="JS/onDocumentMouseDown.js"></script>
+    <script src="JS/resize_orbiteEvent.js"></script>
+    <script src="JS/arret_animation.js"></script>
+    <script src="JS/planetes.js"></script>
+    <script src="JS/CanvasRenderer.js"></script>
+    <script src="JS/dat.gui.min.js"></script>
+
+
+    <script id="fragmentShader" type="x-shader/x-fragment">
+    			uniform float time;uniform vec2 resolution;uniform float fogDensity;
+    			uniform vec3 fogColor;uniform sampler2D texture1;uniform sampler2D texture2;
+    			varying vec2 vUv;
+    			void main( void ) {
+    				vec2 position = -1.0 + 2.0 * vUv;
+    				vec4 noise = texture2D( texture1, vUv );
+    				vec2 T1 = vUv + vec2( 1.5, -1.5 ) * time  *0.02;
+    				vec2 T2 = vUv + vec2( -0.5, 2.0 ) * time * 0.01;
+    				T1.x += noise.x * 2.0;
+    				T1.y += noise.y * 2.0;
+    				T2.x -= noise.y * 0.2;
+    				T2.y += noise.z * 0.2;
+    				float p = texture2D( texture1, T1 * 2.0 ).a;
+    				vec4 color = texture2D( texture2, T2 * 2.0 );
+    				vec4 temp = color * ( vec4( p, p, p, p ) * 2.0 ) + ( color * color - 0.1 );
+    				if( temp.r > 1.0 ){ temp.bg += clamp( temp.r - 2.0, 0.0, 100.0 ); }
+    				if( temp.g > 1.0 ){ temp.rb += temp.g - 1.0; }
+    				if( temp.b > 1.0 ){ temp.rg += temp.b - 1.0; }
+    				gl_FragColor = temp;
+    				float depth = gl_FragCoord.z / gl_FragCoord.w;
+    				const float LOG2 = 1.442695;
+    				float fogFactor = exp2( - fogDensity * fogDensity * depth * depth * LOG2 );
+    				fogFactor = 1.0 - clamp( fogFactor, 0.0, 1.0 );
+    				gl_FragColor = mix( gl_FragColor, vec4( fogColor, gl_FragColor.w ), fogFactor );
+    			}
+    		</script>
+    		<script id="vertexShader" type="x-shader/x-vertex">
+    			uniform vec2 uvScale;
+    			varying vec2 vUv;
+    			void main()
+    			{
+    				vUv = uvScale * uv;
+    				vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
+    				gl_Position = projectionMatrix * mvPosition;
+    			}
+    		</script>
+
+            <script type="x-shader/x-vertex" id="vertexshader">
+    			attribute float size;
+    			attribute vec3 customColor;
+    			varying vec3 vColor;
+    			void main() {
+    				vColor = customColor;
+    				vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
+    				gl_PointSize = size * ( 300.0 / -mvPosition.z );
+    				gl_Position = projectionMatrix * mvPosition;
+    			}
+    		</script>
+
+    		<script type="x-shader/x-fragment" id="fragmentshader">
+    			uniform vec3 color;
+    			uniform sampler2D texture;
+    			varying vec3 vColor;
+    			void main() {
+    				gl_FragColor = vec4( color * vColor, 1.0 );
+    				gl_FragColor = gl_FragColor * texture2D( texture, gl_PointCoord );
+    			}
+    		</script>
+<script>
+/********************************************************** /
+/                            GUI                            /
+/***********************************************************/
+
+var gui = new dat.GUI({autoplace: false, height: 200, width: 500});
+var info = {
+   Motd: "Bienvenue dans notre système",
+   Mouvement: "Toutes les rotations sont opérationnelles",
+   Particules: "Particules animées et en mouvement",
+   Eclairage: "Eclairage fonctionnelle",
+   Comète: "Pas de comète implémentée",
+   Shadow: "Ombres présentes et adoucies ",
+   Skybox: "Présente",
+   Interaction: "Présente : Pavé numérique pour changer de planète, les touches R, V et C pour changer la lumière et les textures, clique pour centrer et P pour afficher les orbites "
+};
+gui.add(info, "Motd");
+gui.add(info, "Mouvement");
+gui.add(info, "Particules");
+gui.add(info, "Eclairage");
+gui.add(info, "Comète");
+gui.add(info, "Shadow");
+gui.add(info, "Skybox");
+gui.add(info, "Interaction");
+
+
+
+
+/********************************************************** /
+/                            SCENE                          /
+/***********************************************************/
+  var scene = new THREE.Scene();
+  var aspect = window.innerWidth / window.innerHeight;
+  var camera = new THREE.PerspectiveCamera( 100, aspect, 0.1, 1000 );
+  var settings = {canvas: this.canvas, antialias: true, alpha: true};
+  var renderer = new THREE.WebGLRenderer(settings);
+  renderer.shadowMap.enabled = true;
+  controls = new THREE.OrbitControls( camera );
+
+
+/********************************************************** /
+/                           SKYBOX                          /
+/***********************************************************/
+  var skyboxGeometry = new THREE.SphereGeometry(600, 200, 20); // taille,...
+	var loader = new THREE.TextureLoader();
+	var texture = loader.load("Images/skybox.png");
+	var material = new THREE.MeshBasicMaterial({map : texture});
+  material.side = THREE.BackSide; // on mets le texture dans le coté intérieur de la sphère
+  var sky = new THREE.Mesh( skyboxGeometry, material);
+	sky.position.scale = -1;
+  scene.add(sky);
+
+/********************************************************** /
+/                           SOLEIL                          /
+/***********************************************************/
+  var text_sol = "Images/lavatile.jpg";
+  var textureLoader = new THREE.TextureLoader();
+				uniforms = {
+					fogDensity: { value: 0 },  //0.45 },
+					fogColor:   { value: new THREE.Vector3( 0, 0, 0 ) },
+					time:       { value: 1.0 },
+					resolution: { value: new THREE.Vector2() },
+					uvScale:    { value: new THREE.Vector2( 3.0, 1.0 ) },
+					texture1:   { value: textureLoader.load( "Images/cloud.png" ) },
+					texture2:   { value: textureLoader.load( text_sol/*"Images/neb.jpg" /*"Images/sol.png"*/ /*"Images/testLava.jpg"*/  )}
+				};
+				uniforms.texture1.value.wrapS = uniforms.texture1.value.wrapT = THREE.RepeatWrapping;
+				uniforms.texture2.value.wrapS = uniforms.texture2.value.wrapT = THREE.RepeatWrapping;
+				var size = 0.65;
+
+  var taille_sol = 30;  //1 400 000
+  var geometry3 = new THREE.SphereGeometry( taille_sol, 200, 20);
+
+  material3 = new THREE.ShaderMaterial( {
+      uniforms: uniforms,
+      vertexShader: document.getElementById( 'vertexShader' ).textContent,
+      fragmentShader: document.getElementById( 'fragmentShader' ).textContent
+  } );
+  var soleil = new THREE.Mesh( geometry3, material3 );
+  scene.add(soleil);
+
+/********************************************************** /
+/                   SOLEIL ECLAIRE UNIVERS                  /
+/***********************************************************/
+  var couleur_lum = 0xff3300;
+
+  lightSol = new THREE.PointLight( couleur_lum, 4 , 0 , 1); //violet : 0x7A128C orange : 0xff3300    bleu : 0x053EFA
+  lightSol.position.x = soleil.position.x;
+  lightSol.position.z = soleil.position.z;
+  lightSol.castShadow = true;            // default false
+
+  scene.add(lightSol);
+
+  //Set up shadow properties for the light
+  lightSol.shadow.mapSize.width = 2048; //512;  // default
+  lightSol.shadow.mapSize.height = 2048; //512; // default
+  lightSol.shadow.camera.near = 2;       // 0.5 default
+  lightSol.shadow.camera.far = 100; // 1000
+  lightSol.shadowBias = 0.00002;
+  lightSol.shadowDarkness = 0.2;
+  lightSol.shadow.radius = 0;
+/********************************************************** /
+/                           LUMIERE                         /
+/***********************************************************/
+  renderer.setClearColor(0x999999, 1);
+  renderer.setSize( window.innerWidth, window.innerHeight );
+  document.body.appendChild( renderer.domElement );
+  renderer.shadowMapType = THREE.PCFSoftShadowMap;
+  //var light = new THREE.AmbientLight( 0x444444 , 1);//   0xff0000   10
+ // scene.add(light);
+
+ /********************************************************** /
+ /                          Planètes                         /
+ /***********************************************************/
+  var mercure;
+  scene.add( mercure );
+  var venus;
+  scene.add( venus );
+  var mars;
+  scene.add( mars );
+  var ceres;
+  scene.add( ceres );
+  var jupiter;
+  scene.add( jupiter );
+  var terre_lune;
+    var terre;
+    terre_lune.add( terre );
+      var groupe_lune;
+        var lune;
+        groupe_lune.add(lune);
+        terre_lune.add(lune);
+  scene.add(terre_lune);
+
+  var anneaux_saturne;
+    var saturne;
+    anneaux_saturne.add( saturne );
+
+
+  var anneau_d_sat;
+  anneaux_saturne.add( anneau_d_sat );
+  anneau_d_sat.rotation.x = 11;
+  anneau_d_sat.rotation.y = -0.2;
+
+  var anneau_c_sat;
+  anneaux_saturne.add( anneau_c_sat );
+  anneau_c_sat.rotation.x = 11;
+  anneau_c_sat.rotation.y = -0.2;
+
+  var anneau_b_sat;
+  anneaux_saturne.add( anneau_b_sat );
+  anneau_b_sat.rotation.x = 11;
+  anneau_b_sat.rotation.y = -0.2;
+
+  var anneau_a_sat;
+  anneaux_saturne.add( anneau_a_sat );
+  anneau_a_sat.rotation.x = 11;
+  anneau_a_sat.rotation.y = -0.2;
+
+  var anneau_f_sat;
+  anneaux_saturne.add( anneau_f_sat );
+  anneau_f_sat.rotation.x = 11;
+  anneau_f_sat.rotation.y = -0.2;
+
+  scene.add(anneaux_saturne);
+
+/********************************************************** /
+/                          URANUS                          /
+/***********************************************************/
+  var geometry = new THREE.SphereGeometry( 5.1, 200, 20)
+  var texture = loader.load("Images/uranus.jpg");
+  var material = new THREE.MeshPhongMaterial({color: 0xaaaaaa,map : texture});
+  var uranus = new THREE.Mesh( geometry, material );
+  uranus.castShadow = true; //default is false
+  uranus.receiveShadow = true; //default
+  scene.add( uranus );
+
+/********************************************************** /
+/                          NEPTUNE                          /
+/***********************************************************/
+  var geometry = new THREE.SphereGeometry( 4.9, 200, 20)
+  var texture = loader.load("Images/neptune.jpg");
+  var material = new THREE.MeshPhongMaterial({color: 0xaaaaaa,map : texture});
+  var neptune = new THREE.Mesh( geometry, material );
+  neptune.castShadow = true; //default is false
+  neptune.receiveShadow = true; //default
+  scene.add( neptune );
+
+
+
+/********************************************************** /
+/                     ORBITE TERRE                          /
+/***********************************************************/
+  var geometry = new THREE.TorusGeometry( 50, 0.05, 2, 100);  // ( diamètre  , largueur  , épaisseur)
+  var material = new THREE.MeshBasicMaterial( { color: 0xffa500 } );
+  var o_terre = new THREE.Mesh( geometry, material );
+  scene.add( o_terre );
+  o_terre.rotation.x = 11;
+
+/********************************************************** /
+/                     ORBITE MERCURE                        /
+/***********************************************************/
+  var geometry = new THREE.TorusGeometry( 40, 0.01, 2, 100);  // ( diamètre  , largueur  , épaisseur)
+  var material = new THREE.MeshBasicMaterial( { color: 0xff0000 } );
+  var o_mercure = new THREE.Mesh( geometry, material );
+  scene.add( o_mercure );
+  o_mercure.rotation.x = 11;
+
+/********************************************************** /
+/                     ORBITE VENUS                          /
+/***********************************************************/
+  var geometry = new THREE.TorusGeometry( 45, 0.05, 2, 100);  // ( diamètre  , largueur  , épaisseur)
+  var material = new THREE.MeshBasicMaterial( { color: 0xff4500 } );
+  var o_venus = new THREE.Mesh( geometry, material );
+  scene.add( o_venus );
+  o_venus.rotation.x = 11;
+
+/********************************************************** /
+/                     ORBITE MARS                           /
+/***********************************************************/
+  var geometry = new THREE.TorusGeometry( 55, 0.05, 2, 100);  // ( diamètre  , largueur  , épaisseur)
+  var material = new THREE.MeshBasicMaterial( { color: 0x66cd00 } );
+  var o_mars = new THREE.Mesh( geometry, material );
+  scene.add( o_mars );
+  o_mars.rotation.x = 11;
+
+/********************************************************** /
+/                     ORBITE JUPITER                        /
+/***********************************************************/
+  var geometry = new THREE.TorusGeometry( 80, 0.2, 2, 100);  // ( diamètre  , largueur  , épaisseur)
+  var material = new THREE.MeshBasicMaterial( { color: 0x008b00 } );
+  var o_jupiter = new THREE.Mesh( geometry, material );
+  scene.add( o_jupiter );
+  o_jupiter.rotation.x = 11;
+
+/********************************************************** /
+/                     ORBITE SATURNE                        /
+/***********************************************************/
+  var geometry = new THREE.TorusGeometry( 120, 0.2, 2, 100);  // ( diamètre  , largueur  , épaisseur)
+  var material = new THREE.MeshBasicMaterial( { color: 0x104e8b } );
+  var o_saturne = new THREE.Mesh( geometry, material );
+  scene.add( o_saturne );
+  o_saturne.rotation.x = 11;
+
+/********************************************************** /
+/                     ORBITE URANUS                         /
+/***********************************************************/
+  var geometry = new THREE.TorusGeometry( 160, 0.2, 2, 100);  // ( diamètre  , largueur  , épaisseur)
+  var material = new THREE.MeshBasicMaterial( { color: 0x36648b } );
+  var o_uranus = new THREE.Mesh( geometry, material );
+  scene.add( o_uranus );
+  o_uranus.rotation.x = 11;
+
+/********************************************************** /
+/                     ORBITE NEPTUNE                        /
+/***********************************************************/
+  var geometry = new THREE.TorusGeometry( 200, 0.2, 2, 100);  // ( diamètre  , largueur  , épaisseur)
+  var material = new THREE.MeshBasicMaterial( { color: 0x00f5ff } );
+  var o_neptune = new THREE.Mesh( geometry, material );
+  scene.add( o_neptune );
+  o_neptune.rotation.x = 11;
+
+
+
+
+  camera.position.z = 80;
+  camera.position.y = 50;
+
+
+/********************************************************** /
+/                        VARIABLES                          /
+/***********************************************************/
+
+terre_center = false;
+lune_center = false;
+soleil_center = false;
+mercure_center = false;
+venus_center = false;
+mars_center = false;
+jupiter_center = false;
+saturne_center = false;
+uranus_center = false;
+neptune_center = false;
+
+
+agrandir = false;
+var scale_sol = 1.20;
+
+
+
+/********************************************************** /
+/                   PARTICULES ETOILES                      /
+/***********************************************************/
+      var particleSystem, uni, geometry;
+      var particles = 6000;
+
+      uni = {
+				color:     { value: new THREE.Color( 0xffffff ) },
+				texture:   { value: new THREE.TextureLoader().load( "Images/spark1.png" ) }
+			};
+
+			var shaderMaterial = new THREE.ShaderMaterial( {
+				uniforms:       uni,
+				vertexShader:   document.getElementById( 'vertexshader' ).textContent,
+				fragmentShader: document.getElementById( 'fragmentshader' ).textContent,
+				blending:       THREE.AdditiveBlending,
+				depthTest:      true,
+				transparent:    true
+			});
+
+			var radius = 400;
+			geometry = new THREE.BufferGeometry();
+
+			var positions = new Float32Array( particles * 3 );
+			var colors = new Float32Array( particles * 3 );
+			var sizes = new Float32Array( particles );
+			var color = new THREE.Color();
+
+			for ( var i = 0, i3 = 0; i < particles; i ++, i3 += 3 ) {
+				positions[ i3 + 0 ] = ( Math.random() * 2 - 1 ) * radius;
+				positions[ i3 + 1 ] = ( Math.random() * 2 - 1 ) * radius;
+				positions[ i3 + 2 ] = ( Math.random() * 2 - 1 ) * radius;
+				color.setHSL(57, 100, 40);
+				colors[ i3 + 0 ] = color.r;
+				colors[ i3 + 1 ] = color.g;
+				colors[ i3 + 2 ] = color.b;
+				sizes[ i ] = 2;
+			}
+			geometry.addAttribute( 'position', new THREE.BufferAttribute( positions, 3 ) );
+			geometry.addAttribute( 'customColor', new THREE.BufferAttribute( colors, 3 ) );
+			geometry.addAttribute( 'size', new THREE.BufferAttribute( sizes, 1 ) );
+
+			particleSystem = new THREE.Points( geometry, shaderMaterial );
+
+			scene.add( particleSystem );
+/********************************************************** /
+/                        FONCTIONS                          /
+/***********************************************************/
+
+document.addEventListener("keypress", onDocumentPlanetSearchPress, false);
+document.addEventListener("keypress", onDocumentPPress, false);
+document.addEventListener("keypress", onDocumentLetterPress, false);
+document.addEventListener( 'resize', onWindowResize, false );
+document.addEventListener("mousedown", onDocumentMouseDown, false);
+document.addEventListener("keypress", onDocumentKeyPress, false);
+
+
+var time = 0;
+
+var render = function () {
+
+  onWindowResize();
+  requestAnimationFrame( render );
+
+  controls.update();
+// Vitesse de mouvement des animations soleil
+  var delta = 0.2;
+	uniforms.time.value += 0.2 * delta;
+
+  var tim = Date.now() * 0.0005;
+			particleSystem.rotation.z = 0.01 * tim;
+			var sizes = geometry.attributes.size.array;
+			for ( var i = 0; i < particles; i++ ) {
+				sizes[ i ] = 2 * ( 1 + Math.sin( 0.1 * i + tim ) );
+			}
+			geometry.attributes.size.needsUpdate = true;
+
+if(afficher_orbite == false){
+  enlever_orbite();
+}else{
+  ajouter_orbite();
+}
+  arret_animation(arret);
+/********************************************************** /
+/               Mise au centre des éléments                 /
+/***********************************************************/
+  if(soleil_center){
+    controls.target.copy( soleil.getWorldPosition() );
+    // Agrandir le soleil au clic
+    /*if(agrandir){
+    scale_sol += 0.2;
+    soleil.scale.set(scale_sol, scale_sol, scale_sol);
+    agrandir = false;
+  }*/
+  }else if(terre_center){
+    controls.target.copy( terre.getWorldPosition() );
+  }else if(lune_center){
+    controls.target.copy( lune.getWorldPosition() );
+  }else if(mercure_center){
+    controls.target.copy( mercure.getWorldPosition() );
+  }else if(venus_center){
+    controls.target.copy( venus.getWorldPosition() );
+  }else if(mars_center){
+    controls.target.copy( mars.getWorldPosition() );
+  }else if(jupiter_center){
+    controls.target.copy( jupiter.getWorldPosition() );
+  }else if(saturne_center){
+    controls.target.copy( saturne.getWorldPosition() );
+  }else if(uranus_center){
+    controls.target.copy( uranus.getWorldPosition() );
+  }else if(neptune_center){
+    controls.target.copy( neptune.getWorldPosition() );
+  }
+
+  mercure.position.x = Math.cos(time/88)*40+soleil.position.x;
+  mercure.position.z = Math.sin(time/88)*40+soleil.position.z;
+
+  venus.position.x = Math.cos(time/225)*45+soleil.position.x;
+  venus.position.z = Math.sin(time/225)*45+soleil.position.z;
+
+  lune.position.x = Math.cos(time/40)*(2)+terre.position.x;
+  lune.position.z = Math.sin(time/40)*(2)+terre.position.z;
+
+  terre_lune.position.x = Math.cos(time/365)*50+soleil.position.x;
+  terre_lune.position.z = Math.sin(time/365)*50+soleil.position.z;
+  //Math.cos(time/?? vitesse)* distance
+
+  mars.position.x = Math.cos(time/669)*55+soleil.position.x;
+  mars.position.z = Math.sin(time/669)*55+soleil.position.z;
+
+  ceres.position.x = Math.cos(time/669)*60+soleil.position.x;
+  ceres.position.z = Math.sin(time/669)*60+soleil.position.z;
+
+  jupiter.position.x = Math.cos(time/1500)*80+soleil.position.x;
+  jupiter.position.z = Math.sin(time/1500)*80+soleil.position.z;
+
+  anneaux_saturne.position.x = Math.cos(time/2500)*120+soleil.position.x;
+  anneaux_saturne.position.z = Math.sin(time/2500)*120+soleil.position.z;
+
+  uranus.position.x = Math.cos(time/4000)*160+soleil.position.x;
+  uranus.position.z = Math.sin(time/4000)*160+soleil.position.z;
+
+  neptune.position.x = Math.cos(time/5500)*200+soleil.position.x;
+  neptune.position.z = Math.sin(time/5500)*200+soleil.position.z;
+  //scene.rotation.y += 0.0005;
+
+  renderer.render( scene, camera );
+  };
+
+  render();
+
+
+    </script>
+  </body>
+</html>
